@@ -1,0 +1,175 @@
+#!/usr/bin/perl -w
+use strict;
+use CGI qw(:standard);
+use CGI::Carp qw(fatalsToBrowser);
+
+=pod
+   This script perform go enrichment analysis of reciewed data from front html page, in this program ,we would call go_enrichment_SP.pl, CLFGO_2R_pic.pl, grep_GOResult_by3Func.pl, these perl scripts can be downloaded from http://www2.ficusgd.com/download/3-scripts, the go_enrichment_SP.pl would will use R’s dhyper function to calculate the hypergeometric distribution. 
+=cut
+
+my ($geneID, $upload, $pvalue, $database, $aspect, $correction, $pic, $first);
+$geneID = param('ID');
+$upload = param('files[UPLOAD]');
+$pvalue = param('pvalue');
+$database = param('SELECT_DATASET');
+$aspect = param('choose_aspect');
+$correction = param('choose_correction');
+$pic = param('choose_pic');
+
+# Save the file or text box contents that the front page reads into /var/www/cgi-bin/tmp.txt as a temporary file
+open OUT,">/var/www/cgi-bin/tmp.txt";
+if($upload){
+    while(<$upload>){print OUT;}
+}elsif($geneID){
+	    my @genes = split /\,/, $geneID;
+	foreach my $gene(@genes){print OUT $gene."\n";}
+	$first = shift @genes;
+    $first =~ s/[0-9]{2}Gene[0-9]{5}//;
+    if($first eq "FC"){$first = "/var/www/cgi-bin/GO/carica.GO";}
+	    elsif($first eq "FE"){$first = "/var/www/cgi-bin/GO/erecta.GO";}
+	    elsif($first eq "FH"){$first = "/var/www/cgi-bin/GO/hispida.GO";}
+	    elsif($first eq "FM"){$first = "/var/www/cgi-bin/GO/microcarpa.GO";}
+elsif($first eq "FP"){$first = "/var/www/cgi-bin/GO/pumila.GO";}
+	else{die "You must input the geneID of 5 Ficus preserved in this DATABASE(carica/erecta/hispida/microcarpa/pumila) \n or upload a file containing gene IDs!";}
+}
+close OUT;
+
+# Generate the final result
+chdir "/var/www/cgi-bin/GO/";
+my $cmd = "rm final_results.txt && rm go_enrichment*";
+(system $cmd == 0) or die "cannot execute: $cmd! ";
+if($database eq "SELECT_DB"){die "Please select one Dataset and resubmit!";}
+elsif($database eq $first || $upload){
+$cmd = "perl go_enrichment_SP.pl --correction \$correction --FDR \$pvalue go-basic.obo \$database /var/www/cgi-bin/tmp.txt  \>  final_results.txt";
+(system $cmd == 0) or die "cannot execute : $cmd! ";}
+else{die "Please upload a list of gene IDs or upload a file; the gene IDs must be corresponding to the Dataset!";}
+
+# The results are filtered according to three functional categories
+ chdir "/var/www/cgi-bin/GO/filter/";
+ if($aspect eq "All"){`cp /var/www/cgi-bin/GO/final_results.txt Filtered_final_results.txt`;}
+ elsif($aspect eq "Function.ID"){`perl grep_GOResult_by3Func.pl $aspect /var/www/cgi-bin/GO/final_results.txt > Filtered_final_results.txt`;}
+ elsif($aspect eq "Process.ID"){`perl grep_GOResult_by3Func.pl $aspect /var/www/cgi-bin/GO/final_results.txt > Filtered_final_results.txt`;}
+ elsif($aspect eq "Component.ID"){`perl grep_GOResult_by3Func.pl $aspect /var/www/cgi-bin/GO/final_results.txt > Filtered_final_results.txt`;}
+
+# Output the result to the hash
+my @hang = qw /GO TERM TOTAL STUDY STUDY2 P Padjust SPACE NAME ID/;
+my %hash;
+my $n=1;
+
+open INN,"/var/www/cgi-bin/GO/filter/Filtered_final_results.txt" or die "$!Please reload the file";
+while(<INN>){
+	    chomp;
+	    my @line = split /\t/, $_;
+	    foreach my $k(@hang){$hash{$n}{$k}= shift @line;}
+	$n ++;
+}
+
+# If $pic equals yes, the R package will be called to perform the drawing, generating tmp.pdf
+if ($pic eq "yes"){
+	chdir "/var/www/cgi-bin/GO/columnPic/";
+	`rm -f tmp*`;
+$cmd = "perl CLFGO_2R_pic.pl /var/www/cgi-bin/GO/final_results.txt  > tmp.csv";
+	(system $cmd == 0) or die "cannot execute: $cmd! ";
+open OUT,  "> /var/www/cgi-bin/GO/columnPic/tmp.R” or die “$!";
+print OUT  "library(org.Hs.eg.db)\n";
+print OUT  "library(clusterProfiler)\n ";
+print OUT  "library(ggplot)\n";
+print OUT  "go3 = read.csv('tmp.csv',header = TRUE, sep = ',')\n";
+print OUT  "library(dplyr)\n";
+print OUT  "top10 \<- go3 \%>\% group_by(ONTOLOGY) \%\>\% group_modify(\~ head(.x, 10))\n";
+print OUT  "pdf('test.pdf',width=20,height = 8)\n";
+print OUT  "ggplot(top10, aes(x=Description, y=-log10(p.adjust), fill=ONTOLOGY)) \+\n";
+print OUT  "geom_bar(stat='identity') +\n";
+print OUT  "coord_flip()\+\n";
+print OUT  "scale_x_discrete(limits=rev(top10\$Description))\+\n";
+print OUT  "theme_classic()\+\n";
+print OUT "theme(text = element_text(size=20),axis.title.y=element_blank(),axis.title.x=element_text(size=15),legend.title=element_blank())\n";
+print OUT  "dev.off()\n";
+close OUT;
+$cmd = "cat tmp.R | /opt/sysoft/R-4.0.2/bin/R --vanilla –slave";
+(system $cmd) == 0 or die "cannot execute: $cmd! ";
+	$cmd = "chmod 755 tmp*`";
+    (system $cmd) == 0 or die "cannot execute: $cmd!";
+    `cp tmp.csv /opt/download/`;
+    $cmd = "/bin/cp tmp.pdf /opt/download/";
+(system $cmd) == 0 or die "cannot execute: $cmd!";
+&Print_Results2;
+	&Print_Results1;
+	close INN;	
+}
+# Otherwise, the Filtered_final_results.txt table is displayed on the web page
+else{
+   &Print_Results2;
+   close INN;
+}
+
+# The received parameters are displayed in a table on the web page
+sub Print_Results1{
+print<<HTML;
+<HTML>
+ 
+<B>Result Talbe download:</B>
+<a href="/download/tmp.csv" target="_blank">CSV RESULTS<a>
+<B>;--Result Picture download:</B>
+<a href="/download/tmp.pdf" target="_blank">PDF RESULTS   <a>
+<br>
+<embed width="1400" height="560" src="/download/tmp.pdf"></embed>
+ 
+<B>All input parameters.</B>
+<table border="1" style="font-size:10px; ">
+	<tr>
+	     <td>ALL_parameter:</td>
+	     <td>geneID</td>
+	     <td>upload</td>
+	       <td>database</td>
+	       <td>pvalue</td>
+	</tr>
+	    <tr>
+       <td>VALUE:</td>
+       <td>$geneID</td>
+	       <td>$upload</td>
+	       <td>$database</td>
+	       <td>$pvalue</td>
+	  </tr>
+	<tr>
+	       <td>NEW_parameter:</td>
+       <td>aspect</td>
+	       <td>first</td>
+	       <td>database</td>
+	       <td>correction</td>
+	</tr>
+	<tr>
+	       <td>VALUE:</td>
+	       <td>$aspect</td>
+	       <td>$first</td>
+	       <td>$database</td>
+	       <td>$correction</td>
+	</tr>
+</table>
+HTML
+}
+
+# Enrichment analysis results table shows the subroutine
+sub Print_Results2{
+    my $q = 'CGI'->new;
+  print $q->header;
+    print $q->start_html(
+		-link=>{-rel=>'icon',-href=>'icon_net.ico'},
+		    -title=>'GO enrichmnt|Ficusgd',
+    );
+    print "<PRE><B>Input File Name:</B>$upload \n";
+    print "<B>Mime:</B> $Mime\n";
+    print "<B>Table. GO enrichment list.</B>\n";
+    print $q->table(
+	    {-border => 1},
+	    {-font => "58px"},
+	    map {
+		      my $everyHang = $_;
+	   	   $q->Tr,
+		  map $q->td($hash{$everyHang}{$_}), @hang      
+	    } sort keys %hash
+    );
+    print "</PRE>";
+    print $q->end_html;
+}
+

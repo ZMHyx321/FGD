@@ -1,0 +1,31 @@
+#!/usr/bin/perl -w
+use strict;
+
+my $usage=<<USAGE;
+usage:
+  perl $0 全部gaf或者intron FM01Scaffold.list > FM01Scaffold.gaf
+USAGE
+die $usage unless @ARGV == 2;
+
+open IN,"$ARGV[0]" or die "$!";
+open INN,"$ARGV[1]" or die "$!";
+
+chomp(my @list = <INN>);
+close INN;
+
+my %hash;
+while(<IN>){
+	chomp;
+	my @line = split /\t/;
+	$hash{$line[0]} = $line[1];
+}
+
+foreach (@list){
+	if(exists $hash{$_}){
+		print "$_\t$hash{$_}\n";
+	}
+}
+
+close IN;
+
+
